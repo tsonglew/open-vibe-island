@@ -149,7 +149,7 @@ struct AppearanceSettingsPane: View {
     private var previewSection: some View {
         sectionHeader(title: lang.t("settings.appearance.preview"), note: nil)
 
-        SettingsPreviewStage(lang: lang, contentTopPadding: 16, contentBottomPadding: 18) {
+        SettingsPreviewStage(contentTopPadding: 16, contentBottomPadding: 18) {
             VStack(spacing: 14) {
                 previewStage
                 previewControls
@@ -159,20 +159,10 @@ struct AppearanceSettingsPane: View {
     }
 
     private var previewStage: some View {
-        let frameW: CGFloat = 420
-        let frameH: CGFloat = 44
         let physicalNotchW: CGFloat = 180
         let pillHeight: CGFloat = 32
 
         return ZStack(alignment: .top) {
-            LinearGradient(
-                colors: [
-                    Color.black.opacity(0.22),
-                    Color.black.opacity(0.34),
-                ],
-                startPoint: .top, endPoint: .bottom
-            )
-
             if previewLayout == .macbook {
                 // Physical hardware notch mock — pinned to the TOP of the
                 // frame, same as the real physical cutout would sit at the
@@ -193,12 +183,7 @@ struct AppearanceSettingsPane: View {
                 )
             }
         }
-        .frame(width: frameW, height: frameH)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.05), lineWidth: 1)
-        )
+        .frame(height: pillHeight)
         .frame(maxWidth: .infinity, alignment: .center)
     }
 
@@ -236,7 +221,7 @@ struct AppearanceSettingsPane: View {
     private var sessionListPreviewSection: some View {
         sectionHeader(title: lang.t("settings.appearance.sessionPreview"), note: nil)
 
-        SettingsPreviewStage(lang: lang, contentTopPadding: 0, contentBottomPadding: 28) {
+        SettingsPreviewStage(contentTopPadding: 20, contentBottomPadding: 28) {
             SessionListPanelPreview(
                 sections: previewSessionSections,
                 showsSections: editingPreferences.sessionGroup != .none,
@@ -849,18 +834,15 @@ private struct AppearanceSessionPreviewItem: Identifiable {
 }
 
 private struct SettingsPreviewStage<Content: View>: View {
-    let lang: LanguageManager
     var contentTopPadding: CGFloat = 20
     var contentBottomPadding: CGFloat = 24
     let content: Content
 
     init(
-        lang: LanguageManager,
         contentTopPadding: CGFloat = 20,
         contentBottomPadding: CGFloat = 24,
         @ViewBuilder content: () -> Content
     ) {
-        self.lang = lang
         self.contentTopPadding = contentTopPadding
         self.contentBottomPadding = contentBottomPadding
         self.content = content()
@@ -868,8 +850,6 @@ private struct SettingsPreviewStage<Content: View>: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SettingsPreviewMenuBar(lang: lang)
-
             content
                 .padding(.top, contentTopPadding)
                 .padding(.bottom, contentBottomPadding)
@@ -881,26 +861,6 @@ private struct SettingsPreviewStage<Content: View>: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(.white.opacity(0.08), lineWidth: 1)
         )
-    }
-}
-
-private struct SettingsPreviewMenuBar: View {
-    let lang: LanguageManager
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text("Open Island")
-                .fontWeight(.semibold)
-            Text(lang.t("settings.appearance.preview.menuItems"))
-            Spacer(minLength: 0)
-            Text("14:22")
-        }
-        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-        .foregroundStyle(.white.opacity(0.42))
-        .lineLimit(1)
-        .padding(.horizontal, 14)
-        .frame(height: 24)
-        .background(.black.opacity(0.12))
     }
 }
 

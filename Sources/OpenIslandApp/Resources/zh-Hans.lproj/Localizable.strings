@@ -102,7 +102,6 @@
 "settings.appearance.staleThreshold.never" = "永不";
 "settings.appearance.preview.permissionNeeded" = "需要授权";
 "settings.appearance.preview.agentEditing" = "Claude · 正在编辑";
-"settings.appearance.preview.menuItems" = "文件  编辑  显示";
 "settings.appearance.preview.approveShellCommand" = "审批 Shell 命令";
 "settings.appearance.preview.promptImplementPlan" = "你：执行计划";
 "settings.appearance.preview.waitingForAnswer" = "等待回答";

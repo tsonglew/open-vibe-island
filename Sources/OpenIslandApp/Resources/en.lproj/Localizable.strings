@@ -102,7 +102,6 @@
 "settings.appearance.staleThreshold.never" = "Never";
 "settings.appearance.preview.permissionNeeded" = "Permission needed";
 "settings.appearance.preview.agentEditing" = "Claude · editing";
-"settings.appearance.preview.menuItems" = "File  Edit  View";
 "settings.appearance.preview.approveShellCommand" = "Approve shell command";
 "settings.appearance.preview.promptImplementPlan" = "You: implement the plan";
 "settings.appearance.preview.waitingForAnswer" = "Waiting for answer";

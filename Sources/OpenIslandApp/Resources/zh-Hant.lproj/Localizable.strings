@@ -102,7 +102,6 @@
 "settings.appearance.staleThreshold.never" = "永不";
 "settings.appearance.preview.permissionNeeded" = "需要授權";
 "settings.appearance.preview.agentEditing" = "Claude · 正在編輯";
-"settings.appearance.preview.menuItems" = "檔案  編輯  顯示";
 "settings.appearance.preview.approveShellCommand" = "核准 Shell 命令";
 "settings.appearance.preview.promptImplementPlan" = "你：執行計畫";
 "settings.appearance.preview.waitingForAnswer" = "等待回答";

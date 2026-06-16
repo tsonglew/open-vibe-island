@@ -1,16 +1,29 @@
 import SwiftUI
 
 /// v6 `UnifiedBars` glyph — three vertical bars that share the same geometry
-/// across all three notch states (idle / running / waiting), so transitions
-/// animate bar heights smoothly instead of swapping glyphs.
+/// across all three notch states (idle / running / waiting), so state changes
+/// animate bar heights smoothly instead of driving a continuous timeline.
 ///
 /// Canonical geometry (from the design handoff): 24×24 box, 3 bars of width
 /// 2.5 centered on columns x = 5.25 / 10.75 / 16.25, rounded to a pill.
 struct UnifiedBars: View {
     enum Mode: Equatable {
-        case idle       // rest — 3 short bars, middle breathes
-        case running    // wave — heights 4→12→4, stagger 0.15s
-        case waiting    // pause — outer bars tall, middle hidden, cross-pulse
+        case idle       // rest — 3 short static bars
+        case running    // active — static tall wave frame
+        case waiting    // pause — static outer bars, middle hidden
+
+        var timelineInterval: TimeInterval? {
+            nil
+        }
+
+        var staticRenderTime: TimeInterval {
+            switch self {
+            case .idle, .waiting:
+                0
+            case .running:
+                0.45
+            }
+        }
     }
 
     var mode: Mode
@@ -28,12 +41,15 @@ struct UnifiedBars: View {
         Column(x: 16.25, idleH: 3, waveCycle: [4, 10, 4], waveDelay: 0.30, waitH: 10),
     ]
 
+    @ViewBuilder
     var body: some View {
-        TimelineView(.animation) { timeline in
-            Canvas { context, canvasSize in
-                withScaledContext(context, canvasSize) { ctx in
-                    drawBars(context: ctx, time: timeline.date.timeIntervalSinceReferenceDate)
-                }
+        barsCanvas(time: mode.staticRenderTime)
+    }
+
+    private func barsCanvas(time: TimeInterval) -> some View {
+        Canvas { context, canvasSize in
+            withScaledContext(context, canvasSize) { ctx in
+                drawBars(context: ctx, time: time)
             }
         }
         .frame(width: size, height: size)
@@ -81,11 +97,7 @@ struct UnifiedBars: View {
         switch mode {
         case .idle:
             let h = column.idleH
-            let isMiddle = column.x == Self.columns[1].x
-            let breath = isMiddle
-                ? 0.7 + 0.3 * abs(sin(time * 2 * .pi / 2.8))
-                : 1.0
-            return (h, Self.center - h / 2, breath)
+            return (h, Self.center - h / 2, 1.0)
         case .running:
             let cycle = column.waveCycle
             let period: TimeInterval = 0.9

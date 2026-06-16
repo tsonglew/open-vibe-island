@@ -44,7 +44,21 @@ final class ProcessMonitoringCoordinator {
     @ObservationIgnored
     private var wasCodexAppRunning = false
 
+    private static let startupPollInterval: TimeInterval = 2
+    private static let activePollInterval: TimeInterval = 60
+    private static let idlePollInterval: TimeInterval = 300
     private static let cursorStalenessTimeout: TimeInterval = 600  // 10 minutes
+
+    static func monitoringPollInterval(
+        isResolvingInitialLiveSessions: Bool,
+        hasTrackedLiveSessions: Bool
+    ) -> TimeInterval {
+        if isResolvingInitialLiveSessions {
+            return startupPollInterval
+        }
+
+        return hasTrackedLiveSessions ? activePollInterval : idlePollInterval
+    }
 
     private var state: SessionState {
         get { stateAccessor?() ?? SessionState() }
@@ -68,11 +82,23 @@ final class ProcessMonitoringCoordinator {
                 let probe = self.terminalSessionAttachmentProbe
                 let resolver = self.terminalJumpTargetResolver
                 let liveSessions = self.state.sessions.filter(\.isTrackedLiveSession)
+                let shouldResolveTerminals = !liveSessions.isEmpty
                 let (snapshots, ghosttyAvail, terminalAvail, jumpTargets) = await Task.detached(priority: .utility) {
                     let s = discovery.discover()
-                    let g = probe.ghosttySnapshotAvailability()
-                    let t = probe.terminalSnapshotAvailability()
-                    let j = resolver.resolveJumpTargets(for: liveSessions, activeProcesses: s)
+                    let g: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.GhosttyTerminalSnapshot>
+                    let t: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.TerminalTabSnapshot>
+                    let j: [String: JumpTarget]
+
+                    if shouldResolveTerminals {
+                        g = probe.ghosttySnapshotAvailability()
+                        t = probe.terminalSnapshotAvailability()
+                        j = resolver.resolveJumpTargets(for: liveSessions, activeProcesses: s)
+                    } else {
+                        g = .available([], appIsRunning: false)
+                        t = .available([], appIsRunning: false)
+                        j = [:]
+                    }
+
                     return (s, g, t, j)
                 }.value
                 self.reconcileSessionAttachments(
@@ -81,7 +107,11 @@ final class ProcessMonitoringCoordinator {
                     terminalAvailability: terminalAvail,
                     preResolvedJumpTargets: jumpTargets
                 )
-                try? await Task.sleep(for: .seconds(2))
+                let pollInterval = Self.monitoringPollInterval(
+                    isResolvingInitialLiveSessions: self.isResolvingInitialLiveSessions,
+                    hasTrackedLiveSessions: self.state.sessions.contains(where: \.isTrackedLiveSession)
+                )
+                try? await Task.sleep(for: .milliseconds(Int(pollInterval * 1_000)))
             }
         }
     }

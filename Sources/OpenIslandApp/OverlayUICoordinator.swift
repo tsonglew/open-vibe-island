@@ -222,10 +222,10 @@ final class OverlayUICoordinator {
         overlayPanelController.setHidden(!visible, preferredScreenID: preferredOverlayScreenID)
     }
 
-    /// Whether the island's target screen currently hosts a native-fullscreen
-    /// Space (menu bar collapsed).
-    func isTargetScreenInFullscreen() -> Bool {
-        overlayPanelController.isTargetScreenInFullscreen(preferredScreenID: preferredOverlayScreenID)
+    /// Whether the frontmost application is currently in a native-fullscreen
+    /// Space (independent of which screen the island sits on).
+    func isFrontmostWindowFullscreen() -> Bool {
+        overlayPanelController.isFrontmostWindowFullscreen()
     }
 
     // Legacy compatibility

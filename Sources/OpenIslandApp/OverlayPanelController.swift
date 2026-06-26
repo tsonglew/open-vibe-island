@@ -99,18 +99,73 @@ final class OverlayPanelController {
         }
     }
 
-    /// True when the island's target screen is showing a native-fullscreen
-    /// window. Detected via menu-bar collapse: a fullscreen Space hides the
-    /// menu bar, so the screen's `visibleFrame` reaches the top of `frame`.
-    /// Permission-free (no CGWindowList / Accessibility); the trade-off is that
-    /// it also reports true when the global "automatically hide and show the
-    /// menu bar" setting is on, which is an acceptable edge for an opt-in flag.
-    func isTargetScreenInFullscreen(preferredScreenID: String?) -> Bool {
-        guard let screen = resolveTargetScreen(preferredScreenID: preferredScreenID) else {
+    /// True when the frontmost application is in a native-fullscreen Space —
+    /// i.e. "the user is working in fullscreen" — regardless of which display
+    /// the island itself sits on.
+    ///
+    /// A fullscreen window spans its screen's full width, is anchored to that
+    /// screen's left/bottom edges, and is nearly full height (covering all but,
+    /// at most, the top menu-bar strip). We restrict to the frontmost app since
+    /// that is the window the user is focused on. Window geometry via
+    /// `CGWindowListCopyWindowInfo` is permission-free (only titles / contents
+    /// require Screen Recording) and works from a background accessory app —
+    /// unlike `NSScreen.visibleFrame`, whose menu-bar inset is not a reliable
+    /// fullscreen signal on external displays.
+    func isFrontmostWindowFullscreen() -> Bool {
+        guard let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
             return false
         }
-        let menuBarInset = screen.frame.maxY - screen.visibleFrame.maxY
-        return menuBarInset < 1
+
+        // CGWindow bounds use a top-left origin measured from the top of the
+        // main (menu-bar) display; AppKit screen frames use a bottom-left
+        // origin. Flip about the main display's height to compare them.
+        let mainHeight = NSScreen.screens.first { $0.frame.origin == .zero }?.frame.height
+            ?? NSScreen.main?.frame.height
+            ?? 0
+
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+
+        let edgeTolerance: CGFloat = 2
+        // A fullscreen window may leave the top menu-bar strip (≈30pt) uncovered.
+        let menuBarSlack: CGFloat = 40
+
+        for window in windows {
+            // Normal app windows only (menu bar, Dock, status items live above layer 0).
+            guard (window[kCGWindowLayer as String] as? Int) == 0 else { continue }
+            // Only the frontmost app — that is the one the user is focused on.
+            guard (window[kCGWindowOwnerPID as String] as? Int) == Int(frontPID) else { continue }
+            guard let boundsDict = window[kCGWindowBounds as String] as? NSDictionary,
+                  let cgBounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else {
+                continue
+            }
+
+            let rect = NSRect(
+                x: cgBounds.minX,
+                y: mainHeight - cgBounds.maxY,
+                width: cgBounds.width,
+                height: cgBounds.height
+            )
+
+            // Identify the screen this window lives on (by its center).
+            let center = NSPoint(x: rect.midX, y: rect.midY)
+            guard let screen = NSScreen.screens.first(where: { $0.frame.contains(center) }) else {
+                continue
+            }
+            let screenFrame = screen.frame
+
+            // A fullscreen window spans the screen's full width, sits at its
+            // bottom edge, and is nearly full height.
+            if abs(rect.width - screenFrame.width) < edgeTolerance,
+               abs(rect.minX - screenFrame.minX) < edgeTolerance,
+               abs(rect.minY - screenFrame.minY) < edgeTolerance,
+               rect.height >= screenFrame.height - menuBarSlack {
+                return true
+            }
+        }
+        return false
     }
 
     func setInteractive(_ interactive: Bool) {

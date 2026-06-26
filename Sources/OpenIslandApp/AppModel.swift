@@ -1274,7 +1274,7 @@ final class AppModel {
     }
 
     private func recomputeFullscreenState() {
-        let fullscreen = overlay.isTargetScreenInFullscreen()
+        let fullscreen = overlay.isFrontmostWindowFullscreen()
         guard fullscreen != isFrontmostAppFullscreen else { return }
         isFrontmostAppFullscreen = fullscreen
         applyIslandVisibility()
@@ -1292,7 +1292,15 @@ final class AppModel {
             ]
             fullscreenObservers = names.map { name in
                 center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.recomputeFullscreenState() }
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.recomputeFullscreenState()
+                        // Entering fullscreen animates (~0.5s); the window only
+                        // reaches full size when it settles, so re-sample after.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                            self?.recomputeFullscreenState()
+                        }
+                    }
                 }
             }
             recomputeFullscreenState()

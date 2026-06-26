@@ -138,6 +138,9 @@ final class OverlayUICoordinator {
                 self?.autoCollapseSurfaceHasBeenEntered = false
                 self?.isPointerInsideIslandSurface = false
                 self?.appModel?.measuredNotificationContentHeight = 0
+                // The overlay has returned to the closed pill; re-evaluate
+                // whether auto-hide / fullscreen suppression should now apply.
+                self?.appModel?.applyIslandVisibility()
             }
         )
     }
@@ -207,6 +210,22 @@ final class OverlayUICoordinator {
     func ensureOverlayPanel() {
         guard let appModel else { return }
         overlayPanelController.ensurePanel(model: appModel, preferredScreenID: preferredOverlayScreenID)
+    }
+
+    // MARK: - Island visibility
+
+    /// Orders the always-present pill window out of / back onto the screen.
+    /// The decision (`AppModel.islandShouldBeVisible`) lives on `AppModel`,
+    /// which owns the settings, session state, and fullscreen flag; this is
+    /// the panel-level passthrough.
+    func applyIslandVisibility(_ visible: Bool) {
+        overlayPanelController.setHidden(!visible, preferredScreenID: preferredOverlayScreenID)
+    }
+
+    /// Whether the island's target screen currently hosts a native-fullscreen
+    /// Space (menu bar collapsed).
+    func isTargetScreenInFullscreen() -> Bool {
+        overlayPanelController.isTargetScreenInFullscreen(preferredScreenID: preferredOverlayScreenID)
     }
 
     // Legacy compatibility

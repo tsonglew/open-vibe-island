@@ -78,6 +78,41 @@ final class OverlayPanelController {
         panel?.acceptsMouseMovedEvents = false
     }
 
+    /// Orders the always-present pill window out of (or back into) the window
+    /// server. Distinct from `hide()`, which only toggles mouse passthrough
+    /// while leaving the pill on screen. Idempotent via `panel.isVisible`, so
+    /// it composes safely with `show()`/`ensurePanel()` re-ordering the window
+    /// on their own (boot animation, incoming notification).
+    func setHidden(_ hidden: Bool, preferredScreenID: String?) {
+        guard let panel else { return }
+        if hidden {
+            guard panel.isVisible else { return }
+            eventMonitors.stop()
+            panel.orderOut(nil)
+        } else {
+            guard !panel.isVisible else { return }
+            positionPanel(panel, preferredScreenID: preferredScreenID, animated: false)
+            panel.orderFrontRegardless()
+            panel.ignoresMouseEvents = true
+            panel.acceptsMouseMovedEvents = false
+            startEventMonitoring()
+        }
+    }
+
+    /// True when the island's target screen is showing a native-fullscreen
+    /// window. Detected via menu-bar collapse: a fullscreen Space hides the
+    /// menu bar, so the screen's `visibleFrame` reaches the top of `frame`.
+    /// Permission-free (no CGWindowList / Accessibility); the trade-off is that
+    /// it also reports true when the global "automatically hide and show the
+    /// menu bar" setting is on, which is an acceptable edge for an opt-in flag.
+    func isTargetScreenInFullscreen(preferredScreenID: String?) -> Bool {
+        guard let screen = resolveTargetScreen(preferredScreenID: preferredScreenID) else {
+            return false
+        }
+        let menuBarInset = screen.frame.maxY - screen.visibleFrame.maxY
+        return menuBarInset < 1
+    }
+
     func setInteractive(_ interactive: Bool) {
         guard let panel else {
             return

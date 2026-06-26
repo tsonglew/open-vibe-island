@@ -120,6 +120,9 @@
 "settings.display.diagnostics" = "诊断";
 "settings.display.currentScreen" = "当前屏幕";
 "settings.display.layoutMode" = "布局模式";
+"settings.display.visibility" = "显示与隐藏";
+"settings.display.hideInFullscreen" = "全屏时隐藏";
+"settings.display.autoHideNoSessions" = "无活动会话时自动隐藏";
 
 /* Settings - Sound */
 "settings.sound.notifications" = "通知音效";

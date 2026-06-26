@@ -23,6 +23,8 @@ final class AppModel {
     private static let showCodexUsageDefaultsKey = "app.showCodexUsage"
     private static let completionReplyEnabledDefaultsKey = "feature.completionReply.enabled"
     private static let suppressFrontmostNotificationsDefaultsKey = "app.suppressFrontmostNotifications"
+    private static let hideInFullscreenDefaultsKey = "overlay.hideInFullscreen"
+    private static let autoHideNoActiveSessionsDefaultsKey = "overlay.autoHideNoActiveSessions"
     private static let legacyIslandSessionStateIndicatorDefaultsKey = "appearance.island.v8.stateIndicator"
     private static let legacyIslandSessionGroupDefaultsKey = "appearance.island.v8.sessionGroup"
     private static let legacyIslandSessionSortDefaultsKey = "appearance.island.v8.sessionSort"
@@ -265,6 +267,23 @@ final class AppModel {
             UserDefaults.standard.set(suppressFrontmostNotifications, forKey: Self.suppressFrontmostNotificationsDefaultsKey)
         }
     }
+    /// Hide the island while a native-fullscreen Space is frontmost. Opt-in.
+    var hideInFullscreen: Bool = false {
+        didSet {
+            guard hasFinishedInit, hideInFullscreen != oldValue else { return }
+            UserDefaults.standard.set(hideInFullscreen, forKey: Self.hideInFullscreenDefaultsKey)
+            updateFullscreenObservation()
+            applyIslandVisibility()
+        }
+    }
+    /// Hide the island whenever there are no sessions visible in it. Opt-in.
+    var autoHideNoActiveSessions: Bool = false {
+        didSet {
+            guard hasFinishedInit, autoHideNoActiveSessions != oldValue else { return }
+            UserDefaults.standard.set(autoHideNoActiveSessions, forKey: Self.autoHideNoActiveSessionsDefaultsKey)
+            applyIslandVisibility()
+        }
+    }
     var launchAtLoginEnabled: Bool = false {
         didSet {
             guard !isApplyingLaunchAtLogin, hasFinishedInit, launchAtLoginEnabled != oldValue else { return }
@@ -382,6 +401,13 @@ final class AppModel {
 
     @ObservationIgnored
     private var hasFinishedInit = false
+
+    /// Cached result of the menu-bar-collapse fullscreen probe. Updated only
+    /// while `hideInFullscreen` observation is active.
+    @ObservationIgnored private var isFrontmostAppFullscreen = false
+    /// NSWorkspace Space/app-activation observers, registered lazily so the
+    /// default-off path adds zero overhead.
+    @ObservationIgnored private var fullscreenObservers: [NSObjectProtocol] = []
 
     func appearancePreferences(for profile: IslandAppearanceDisplayProfile) -> IslandAppearancePreferences {
         switch profile {
@@ -591,12 +617,16 @@ final class AppModel {
             Self.hapticFeedbackEnabledDefaultsKey: false,
             Self.completionReplyEnabledDefaultsKey: false,
             Self.suppressFrontmostNotificationsDefaultsKey: true,
+            Self.hideInFullscreenDefaultsKey: false,
+            Self.autoHideNoActiveSessionsDefaultsKey: false,
         ])
         isSoundMuted = UserDefaults.standard.bool(forKey: Self.soundMutedDefaultsKey)
         selectedSoundName = NotificationSoundService.selectedSoundName
         showDockIcon = UserDefaults.standard.bool(forKey: Self.showDockIconDefaultsKey)
         hapticFeedbackEnabled = UserDefaults.standard.bool(forKey: Self.hapticFeedbackEnabledDefaultsKey)
         suppressFrontmostNotifications = UserDefaults.standard.bool(forKey: Self.suppressFrontmostNotificationsDefaultsKey)
+        hideInFullscreen = UserDefaults.standard.bool(forKey: Self.hideInFullscreenDefaultsKey)
+        autoHideNoActiveSessions = UserDefaults.standard.bool(forKey: Self.autoHideNoActiveSessionsDefaultsKey)
         if UserDefaults.standard.object(forKey: Self.showCodexUsageDefaultsKey) != nil {
             showCodexUsage = UserDefaults.standard.bool(forKey: Self.showCodexUsageDefaultsKey)
         } else {
@@ -689,6 +719,7 @@ final class AppModel {
         }
         refreshOverlayDisplayConfiguration()
         hasFinishedInit = true
+        updateFullscreenObservation()
     }
 
     var sessions: [AgentSession] {
@@ -1087,6 +1118,7 @@ final class AppModel {
         }
         refreshOverlayDisplayConfiguration()
         ensureOverlayPanel()
+        applyIslandVisibility()
         if shouldPerformBootAnimation {
             performBootAnimation()
         }
@@ -1214,7 +1246,65 @@ final class AppModel {
     func notePointerInsideIslandSurface() { overlay.notePointerInsideIslandSurface() }
     func handlePointerExitedIslandSurface() { overlay.handlePointerExitedIslandSurface() }
     private func presentNotificationSurface(_ surface: IslandSurface) { overlay.presentNotificationSurface(surface) }
-    private func reconcileIslandSurfaceAfterStateChange() { overlay.reconcileIslandSurfaceAfterStateChange() }
+    private func reconcileIslandSurfaceAfterStateChange() {
+        overlay.reconcileIslandSurfaceAfterStateChange()
+        applyIslandVisibility()
+    }
+
+    // MARK: - Island visibility
+
+    /// Single source of truth for whether the always-present island pill
+    /// should be on screen. Suppression is opt-in and composes (OR): hidden
+    /// when a fullscreen Space is frontmost (if enabled) or when no sessions
+    /// remain visible in the island (if enabled). An actively open or
+    /// expanded overlay — a notification card, hover/click expansion — is
+    /// never yanked away.
+    var islandShouldBeVisible: Bool {
+        if notchStatus != .closed { return true }
+        if hideInFullscreen && isFrontmostAppFullscreen { return false }
+        if autoHideNoActiveSessions && state.liveSessionCount == 0 { return false }
+        return true
+    }
+
+    /// Applies the current visibility decision to the overlay panel. Cheap and
+    /// idempotent (the panel layer guards on `panel.isVisible`), so it is safe
+    /// to call on every session-state change and setting toggle.
+    func applyIslandVisibility() {
+        overlay.applyIslandVisibility(islandShouldBeVisible)
+    }
+
+    private func recomputeFullscreenState() {
+        let fullscreen = overlay.isTargetScreenInFullscreen()
+        guard fullscreen != isFrontmostAppFullscreen else { return }
+        isFrontmostAppFullscreen = fullscreen
+        applyIslandVisibility()
+    }
+
+    /// Registers Space / app-activation observers while `hideInFullscreen` is
+    /// on, and tears them down (resetting the cached flag) when it is off.
+    private func updateFullscreenObservation() {
+        let center = NSWorkspace.shared.notificationCenter
+        if hideInFullscreen {
+            guard fullscreenObservers.isEmpty else { return }
+            let names: [NSNotification.Name] = [
+                NSWorkspace.activeSpaceDidChangeNotification,
+                NSWorkspace.didActivateApplicationNotification,
+            ]
+            fullscreenObservers = names.map { name in
+                center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.recomputeFullscreenState() }
+                }
+            }
+            recomputeFullscreenState()
+        } else {
+            fullscreenObservers.forEach(center.removeObserver)
+            fullscreenObservers.removeAll()
+            if isFrontmostAppFullscreen {
+                isFrontmostAppFullscreen = false
+                applyIslandVisibility()
+            }
+        }
+    }
     private func dismissNotificationSurfaceIfPresent(for sessionID: String) { overlay.dismissNotificationSurfaceIfPresent(for: sessionID) }
     private func dismissOverlayForJump() { overlay.dismissOverlayForJump() }
 

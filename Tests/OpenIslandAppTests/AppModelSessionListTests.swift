@@ -1017,6 +1017,104 @@ struct AppModelSessionListTests {
         #expect(merged.map(\.id) == [existing.id])
     }
 
+    @Test
+    func mergedWithSyntheticCursorSessionsAddsCursorAgentWhenNoTrackedSessionExists() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel()
+
+        let merged = model.monitoring.mergedWithSyntheticCursorSessions(
+            existingSessions: [],
+            activeProcesses: [
+                .init(
+                    tool: .cursor,
+                    sessionID: "6f7b9f8a-2bd0-48b4-a497-9801dd191d03",
+                    workingDirectory: "/tmp/simple-agent-lab",
+                    terminalTTY: "/dev/ttys003",
+                    terminalApp: "Ghostty"
+                ),
+            ],
+            now: now
+        )
+
+        #expect(merged.count == 1)
+        #expect(merged.first?.id == "6f7b9f8a-2bd0-48b4-a497-9801dd191d03")
+        #expect(merged.first?.tool == .cursor)
+        #expect(merged.first?.attachmentState == .attached)
+        #expect(merged.first?.jumpTarget?.terminalApp == "Ghostty")
+        #expect(merged.first?.jumpTarget?.terminalTTY == "/dev/ttys003")
+        #expect(merged.first?.cursorMetadata?.conversationId == "6f7b9f8a-2bd0-48b4-a497-9801dd191d03")
+    }
+
+    @Test
+    func mergedWithSyntheticCursorSessionsSkipsSyntheticWhenHookSessionMatchesConversation() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel()
+        let existing = AgentSession(
+            id: "6f7b9f8a-2bd0-48b4-a497-9801dd191d03",
+            title: "Cursor · simple-agent-lab",
+            tool: .cursor,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .running,
+            summary: "Running",
+            updatedAt: now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Cursor",
+                workspaceName: "simple-agent-lab",
+                paneTitle: "Cursor 6f7b9f8a",
+                workingDirectory: "/tmp/simple-agent-lab"
+            ),
+            cursorMetadata: CursorSessionMetadata(
+                conversationId: "6f7b9f8a-2bd0-48b4-a497-9801dd191d03"
+            )
+        )
+
+        let merged = model.monitoring.mergedWithSyntheticCursorSessions(
+            existingSessions: [existing],
+            activeProcesses: [
+                .init(
+                    tool: .cursor,
+                    sessionID: "6f7b9f8a-2bd0-48b4-a497-9801dd191d03",
+                    workingDirectory: "/tmp/simple-agent-lab",
+                    terminalTTY: "/dev/ttys003",
+                    terminalApp: "Ghostty"
+                ),
+            ],
+            now: now
+        )
+
+        #expect(merged.map(\.id) == [existing.id])
+    }
+
+    @Test
+    func mergedWithSyntheticCursorSessionsDeduplicatesRepeatedConversationProcesses() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel()
+
+        let merged = model.monitoring.mergedWithSyntheticCursorSessions(
+            existingSessions: [],
+            activeProcesses: [
+                .init(
+                    tool: .cursor,
+                    sessionID: "6f7b9f8a-2bd0-48b4-a497-9801dd191d03",
+                    workingDirectory: "/tmp/simple-agent-lab",
+                    terminalTTY: "/dev/ttys003",
+                    terminalApp: "Ghostty"
+                ),
+                .init(
+                    tool: .cursor,
+                    sessionID: "6f7b9f8a-2bd0-48b4-a497-9801dd191d03",
+                    workingDirectory: "/tmp/simple-agent-lab",
+                    terminalTTY: "/dev/ttys004",
+                    terminalApp: "Ghostty"
+                ),
+            ],
+            now: now
+        )
+
+        #expect(merged.map(\.id) == ["6f7b9f8a-2bd0-48b4-a497-9801dd191d03"])
+    }
+
 
     /// Regression test: `measuredNotificationContentHeight` MUST be cleared when the
     /// surface changes to a different session, to avoid sizing the new card with stale

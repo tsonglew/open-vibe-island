@@ -216,8 +216,12 @@ final class ProcessMonitoringCoordinator {
             local = SessionState(sessions: sanitizedSessions)
         }
 
-        let mergedSessions = mergedWithSyntheticClaudeSessions(
+        let mergedClaudeSessions = mergedWithSyntheticClaudeSessions(
             existingSessions: local.sessions,
+            activeProcesses: activeProcesses
+        )
+        let mergedSessions = mergedWithSyntheticCursorSessions(
+            existingSessions: mergedClaudeSessions,
             activeProcesses: activeProcesses
         )
         if mergedSessions != local.sessions {
@@ -226,6 +230,7 @@ final class ProcessMonitoringCoordinator {
 
         // Adopt process TTYs inline on local copy.
         adoptProcessTTYsForClaudeSessions(activeProcesses: activeProcesses, sessions: &local)
+        adoptProcessTTYsForCursorSessions(activeProcesses: activeProcesses, sessions: &local)
 
         // Detect Codex.app running state BEFORE the empty-sessions early
         // return — we need to fire the callback on a brand-new Codex.app
@@ -504,18 +509,33 @@ final class ProcessMonitoringCoordinator {
             }
         }
 
-        // Cursor sessions: Cursor is an Electron IDE — we cannot match
-        // individual session IDs from ps/lsof.  Keep Cursor sessions alive
-        // while Cursor.app is running, but let completed sessions expire
-        // after a staleness window so the notch clears when the user is
-        // no longer interacting with the conversation.  Cursor has no
-        // "tab closed" hook, so this timeout is the best available proxy.
+        // Cursor sessions: prefer concrete cursor-agent processes when they
+        // are visible (Cursor CLI / integrated terminal), then fall back to
+        // app-level liveness for IDE-only hook sessions where there is no
+        // stable subprocess to match.
+        let cursorProcesses = activeProcesses.filter { $0.tool == .cursor }
+        let trackedCursorSessions = sessions.filter { $0.tool == .cursor && !$0.isDemoSession }
+        var claimedCursorSessionIDs: Set<String> = []
+        for process in cursorProcesses {
+            guard let matched = uniqueTrackedCursorSession(
+                for: process,
+                sessions: trackedCursorSessions,
+                claimedSessionIDs: claimedCursorSessionIDs
+            ) else {
+                continue
+            }
+
+            aliveIDs.insert(matched.id)
+            claimedCursorSessionIDs.insert(matched.id)
+        }
+
         let isCursorRunning = !NSRunningApplication.runningApplications(
             withBundleIdentifier: "com.todesktop.230313mzl4w4u92"
         ).isEmpty
         if isCursorRunning {
-            for session in sessions where session.tool == .cursor && !session.isDemoSession {
+            for session in trackedCursorSessions where !claimedCursorSessionIDs.contains(session.id) {
                 if session.isSessionEnded { continue }
+                if normalizedTTYForMatching(session.jumpTarget?.terminalTTY) != nil { continue }
                 let isStale = session.phase == .completed
                     && session.updatedAt.addingTimeInterval(Self.cursorStalenessTimeout) < Date.now
                 if !isStale {
@@ -738,7 +758,174 @@ final class ProcessMonitoringCoordinator {
         session.tool == .claudeCode && session.id.hasPrefix(syntheticClaudeSessionPrefix)
     }
 
+    // MARK: - Synthetic Cursor sessions
+
+    func mergedWithSyntheticCursorSessions(
+        existingSessions: [AgentSession],
+        activeProcesses: [ActiveProcessSnapshot],
+        now: Date = .now
+    ) -> [AgentSession] {
+        let activeCursorProcesses = activeProcesses.filter { $0.tool == .cursor }
+        guard !activeCursorProcesses.isEmpty else {
+            return existingSessions
+        }
+
+        let trackedCursorSessions = existingSessions.filter { $0.tool == .cursor && !$0.isDemoSession }
+        let representedProcessKeys = representedCursorProcessKeys(
+            sessions: trackedCursorSessions,
+            activeProcesses: activeCursorProcesses
+        )
+
+        var seenSessionIDs = Set(existingSessions.map(\.id))
+        var syntheticSessions: [AgentSession] = []
+        for process in activeCursorProcesses
+            .filter({ !representedProcessKeys.contains(processIdentityKey($0)) })
+            .sorted(by: { processIdentityKey($0) < processIdentityKey($1) }) {
+            let candidateID = cursorSyntheticSessionID(for: process)
+            guard seenSessionIDs.insert(candidateID).inserted else {
+                continue
+            }
+
+            syntheticSessions.append(syntheticCursorSession(for: process, sessionID: candidateID, now: now))
+        }
+
+        return existingSessions + syntheticSessions
+    }
+
+    private func cursorSyntheticSessionID(for process: ActiveProcessSnapshot) -> String {
+        process.sessionID ?? "cursor-process:\(processIdentityKey(process))"
+    }
+
+    private func syntheticCursorSession(
+        for process: ActiveProcessSnapshot,
+        sessionID: String? = nil,
+        now: Date
+    ) -> AgentSession {
+        let workingDirectory = process.workingDirectory
+        let workspaceName = workingDirectory.map { WorkspaceNameResolver.workspaceName(for: $0) } ?? "Workspace"
+        let terminalApp = supportedTerminalApp(for: process.terminalApp)
+            ?? process.terminalApp?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? "Unknown"
+        let sessionID = sessionID ?? cursorSyntheticSessionID(for: process)
+
+        var session = AgentSession(
+            id: sessionID,
+            title: "Cursor · \(workspaceName)",
+            tool: .cursor,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .running,
+            summary: "Cursor agent detected from \(terminalApp).",
+            updatedAt: now,
+            jumpTarget: JumpTarget(
+                terminalApp: terminalApp,
+                workspaceName: workspaceName,
+                paneTitle: "Cursor \(sessionID.prefix(8))",
+                workingDirectory: workingDirectory,
+                terminalTTY: process.terminalTTY,
+                tmuxTarget: process.tmuxTarget,
+                tmuxSocketPath: process.tmuxSocketPath
+            ),
+            cursorMetadata: CursorSessionMetadata(
+                conversationId: process.sessionID,
+                workspaceRoots: workingDirectory.map { [$0] }
+            )
+        )
+        session.isProcessAlive = true
+        return session
+    }
+
     // MARK: - Process matching
+
+    private func representedCursorProcessKeys(
+        sessions: [AgentSession],
+        activeProcesses: [ActiveProcessSnapshot]
+    ) -> Set<String> {
+        var representedProcessKeys: Set<String> = []
+        var claimedSessionIDs: Set<String> = []
+
+        for process in activeProcesses {
+            guard let processSessionID = process.sessionID,
+                  sessions.contains(where: {
+                      $0.id == processSessionID
+                          || $0.cursorMetadata?.conversationId == processSessionID
+                  }) else {
+                continue
+            }
+
+            representedProcessKeys.insert(processIdentityKey(process))
+        }
+
+        for process in activeProcesses {
+            let processKey = processIdentityKey(process)
+            guard !representedProcessKeys.contains(processKey) else {
+                continue
+            }
+
+            guard let matchedSession = uniqueTrackedCursorSession(
+                for: process,
+                sessions: sessions,
+                claimedSessionIDs: claimedSessionIDs
+            ) else {
+                continue
+            }
+
+            representedProcessKeys.insert(processKey)
+            claimedSessionIDs.insert(matchedSession.id)
+        }
+
+        return representedProcessKeys
+    }
+
+    private func uniqueTrackedCursorSession(
+        for process: ActiveProcessSnapshot,
+        sessions: [AgentSession],
+        claimedSessionIDs: Set<String>
+    ) -> AgentSession? {
+        let unclaimedSessions = sessions.filter { !claimedSessionIDs.contains($0.id) }
+        guard !unclaimedSessions.isEmpty else {
+            return nil
+        }
+
+        if let processSessionID = process.sessionID {
+            let exactMatches = unclaimedSessions.filter {
+                $0.id == processSessionID
+                    || $0.cursorMetadata?.conversationId == processSessionID
+            }
+            if exactMatches.count == 1 {
+                return exactMatches[0]
+            }
+        }
+
+        if let terminalTTY = normalizedTTYForMatching(process.terminalTTY) {
+            let ttyMatches = unclaimedSessions.filter {
+                normalizedTTYForMatching($0.jumpTarget?.terminalTTY) == terminalTTY
+            }
+            if ttyMatches.count == 1 {
+                return ttyMatches[0]
+            }
+            if ttyMatches.count > 1,
+               let processCWD = normalizedPathForMatching(process.workingDirectory) {
+                let cwdMatches = ttyMatches.filter {
+                    normalizedPathForMatching($0.jumpTarget?.workingDirectory) == processCWD
+                }
+                if cwdMatches.count == 1 {
+                    return cwdMatches[0]
+                }
+            }
+        }
+
+        if let processCWD = normalizedPathForMatching(process.workingDirectory) {
+            let cwdMatches = unclaimedSessions.filter {
+                normalizedPathForMatching($0.jumpTarget?.workingDirectory) == processCWD
+            }
+            if cwdMatches.count == 1 {
+                return cwdMatches[0]
+            }
+        }
+
+        return nil
+    }
 
     private func representedClaudeProcessKeys(
         sessions: [AgentSession],
@@ -930,6 +1117,80 @@ final class ProcessMonitoringCoordinator {
                 changed = true
                 break
             }
+        }
+
+        if changed {
+            localState = SessionState(sessions: sessions)
+        }
+        return changed
+    }
+
+    @discardableResult
+    private func adoptProcessTTYsForCursorSessions(
+        activeProcesses: [ActiveProcessSnapshot],
+        sessions localState: inout SessionState
+    ) -> Bool {
+        let cursorProcesses = activeProcesses.filter { $0.tool == .cursor }
+        guard !cursorProcesses.isEmpty else { return false }
+
+        var sessions = localState.sessions
+        var changed = false
+
+        for process in cursorProcesses {
+            guard let processSessionID = process.sessionID else {
+                continue
+            }
+
+            guard let index = sessions.firstIndex(where: {
+                $0.tool == .cursor
+                    && ($0.id == processSessionID || $0.cursorMetadata?.conversationId == processSessionID)
+            }) else {
+                continue
+            }
+
+            let session = sessions[index]
+            let workingDirectory = process.workingDirectory ?? session.jumpTarget?.workingDirectory
+            let workspaceName = workingDirectory.map { WorkspaceNameResolver.workspaceName(for: $0) }
+                ?? session.jumpTarget?.workspaceName
+                ?? "Workspace"
+            let terminalApp = supportedTerminalApp(for: process.terminalApp)
+                ?? process.terminalApp?.trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? session.jumpTarget?.terminalApp
+                ?? "Unknown"
+            let existingPaneTitle = session.jumpTarget?.paneTitle
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let paneTitle: String
+            if let existingPaneTitle, !existingPaneTitle.isEmpty {
+                paneTitle = existingPaneTitle
+            } else {
+                paneTitle = "Cursor \(processSessionID.prefix(8))"
+            }
+
+            let jumpTarget = JumpTarget(
+                terminalApp: terminalApp,
+                workspaceName: workspaceName,
+                paneTitle: paneTitle,
+                workingDirectory: workingDirectory,
+                terminalSessionID: session.jumpTarget?.terminalSessionID,
+                terminalTTY: process.terminalTTY ?? session.jumpTarget?.terminalTTY,
+                tmuxTarget: process.tmuxTarget ?? session.jumpTarget?.tmuxTarget,
+                tmuxSocketPath: process.tmuxSocketPath ?? session.jumpTarget?.tmuxSocketPath,
+                warpPaneUUID: session.jumpTarget?.warpPaneUUID,
+                codexThreadID: session.jumpTarget?.codexThreadID
+            )
+
+            guard jumpTarget != session.jumpTarget
+                    || session.attachmentState != .attached
+                    || !session.isProcessAlive else {
+                continue
+            }
+
+            sessions[index].jumpTarget = jumpTarget
+            sessions[index].attachmentState = .attached
+            sessions[index].isProcessAlive = true
+            sessions[index].processNotSeenCount = 0
+            sessions[index].updatedAt = .now
+            changed = true
         }
 
         if changed {

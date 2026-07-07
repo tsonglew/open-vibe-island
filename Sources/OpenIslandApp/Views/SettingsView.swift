@@ -252,6 +252,17 @@ struct DisplaySettingsPane: View {
                 }
             }
 
+            Section(lang.t("settings.display.visibility")) {
+                Toggle(lang.t("settings.display.hideInFullscreen"), isOn: Binding(
+                    get: { model.hideInFullscreen },
+                    set: { model.hideInFullscreen = $0 }
+                ))
+                Toggle(lang.t("settings.display.autoHideNoSessions"), isOn: Binding(
+                    get: { model.autoHideNoActiveSessions },
+                    set: { model.autoHideNoActiveSessions = $0 }
+                ))
+            }
+
             if let diag = model.overlayPlacementDiagnostics {
                 Section(lang.t("settings.display.diagnostics")) {
                     LabeledContent(lang.t("settings.display.currentScreen"), value: diag.targetScreenName)

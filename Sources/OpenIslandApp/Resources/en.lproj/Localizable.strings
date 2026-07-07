@@ -120,6 +120,9 @@
 "settings.display.diagnostics" = "Diagnostics";
 "settings.display.currentScreen" = "Current Screen";
 "settings.display.layoutMode" = "Layout Mode";
+"settings.display.visibility" = "Visibility";
+"settings.display.hideInFullscreen" = "Hide in fullscreen";
+"settings.display.autoHideNoSessions" = "Auto-hide when no active sessions";
 
 /* Settings - Sound */
 "settings.sound.notifications" = "Notification Sounds";
